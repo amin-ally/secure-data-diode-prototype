@@ -40,6 +40,19 @@ class PacketHeader:
             self.hmac_signature,
         )
 
+    def pack_without_hmac(self) -> bytes:
+        """Pack header excluding HMAC (for computing HMAC over header + payload)."""
+        return struct.pack(
+            ">B16sIIQII",  # Exclude 32s for hmac
+            self.version,
+            self.file_id,
+            self.sequence_num,
+            self.total_packets,
+            self.timestamp,
+            self.payload_size,
+            self.crc_checksum,
+        )
+
     @classmethod
     def unpack(cls, data: bytes) -> "PacketHeader":
         """Reconstructs header from binary data"""

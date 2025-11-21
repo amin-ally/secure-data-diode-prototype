@@ -8,7 +8,6 @@ from pathlib import Path
 class FileChunker:
     """
     Responsible for breaking files into manageable chunks.
-    Follows Single Responsibility Principle - only handles file operations.
     """
 
     def __init__(self, chunk_size: int = 1024):

@@ -1,5 +1,6 @@
 # src/receiver.py
 import logging
+from reedsolo import RSCodec, ReedSolomonError
 from cryptography.exceptions import InvalidTag
 from src.packet_format import PacketHeader
 from src.network_handler import NetworkHandler
@@ -10,6 +11,7 @@ class Receiver:
     def __init__(self, host="localhost", port=5000):
         self.network = NetworkHandler(host, port)
         self.crypto = CryptoUtils()
+        self.rsc = RSCodec(10)
         self.logger = logging.getLogger("Receiver")
         self.received_packets = {}
 
@@ -25,23 +27,34 @@ class Receiver:
 
                 try:
                     header = PacketHeader.unpack(data)
-                    encrypted_payload = data[PacketHeader.HEADER_SIZE :]
+                    raw_fec_payload = data[PacketHeader.HEADER_SIZE :]
 
-                    # 1. Verify HMAC
+                    # 1. FEC Decode (Fix Errors FIRST)
+                    try:
+                        # .decode returns [decoded_data, decoded_data_with_ecc, err_indices]
+                        # We just want the first element (the original encrypted_payload)
+                        encrypted_payload = self.rsc.decode(raw_fec_payload)[0]
+                    except ReedSolomonError:
+                        self.logger.error(f"FEC Failed: Too many errors from {addr}")
+                        continue
+
+                    # 2. Verify HMAC (On the fixed data)
                     header_clean = header.pack_without_hmac()
                     if not self.crypto.verify_hmac(
                         header_clean + encrypted_payload, header.hmac_signature
                     ):
-                        self.logger.critical(f"HMAC Failure from {addr}")
+                        self.logger.critical(
+                            f"HMAC Failure: Tampering detected from {addr}"
+                        )
                         continue
 
-                    # 2. Decrypt
+                    # 3. Decrypt
                     aad = str(header.sequence_num).encode()
                     decrypted_chunk = self.crypto.decrypt(
                         encrypted_payload, associated_data=aad
                     )
 
-                    # 3. Store
+                    # 4. Store
                     fid = header.file_id.hex()
                     if fid not in self.received_packets:
                         self.received_packets[fid] = {}
@@ -50,6 +63,7 @@ class Receiver:
                     if len(self.received_packets[fid]) == header.total_packets:
                         self.reassemble_file(fid, output_path)
                         break
+
                 except InvalidTag:
                     self.logger.error("Decryption Failed")
                 except Exception as e:

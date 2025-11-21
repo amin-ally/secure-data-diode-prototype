@@ -1,6 +1,8 @@
 # src/sender.py
 import time
 import logging
+import zlib
+from reedsolo import RSCodec, ReedSolomonError
 from src.packet_format import PacketHeader
 from src.network_handler import NetworkHandler
 from src.file_handler import FileChunker
@@ -12,11 +14,12 @@ class Sender:
         self.network = NetworkHandler(host, port)
         self.chunker = FileChunker(chunk_size)
         self.crypto = CryptoUtils()
+        self.rsc = RSCodec(10)
         self.logger = logging.getLogger("Sender")
 
     def send_file(self, filepath: str):
         file_id = self.chunker.generate_file_id()
-        self.logger.info(f"Starting encrypted transfer: {filepath}")
+        self.logger.info(f"Starting secure transfer: {filepath}")
         self.network.setup_sender()
 
         try:
@@ -25,30 +28,38 @@ class Sender:
                 aad = str(seq_num).encode()
                 encrypted_payload = self.crypto.encrypt(chunk, associated_data=aad)
 
-                # 2. Prepare Header
+                # 2. Apply FEC (Encode the encrypted payload)
+                # We do this EARLY so we can calculate the final size and CRC
+                fec_payload = self.rsc.encode(encrypted_payload)
+
+                # 3. Calculate CRC32 on the final wire payload
+                crc = zlib.crc32(fec_payload)
+
+                # 4. Create Header (Now with the CORRECT CRC and SIZE)
                 header = PacketHeader(
                     version=1,
                     file_id=file_id,
                     sequence_num=seq_num,
                     total_packets=total,
                     timestamp=int(time.time() * 1000000),
-                    payload_size=len(encrypted_payload),
-                    crc_checksum=0,  # Not implemented yet
+                    payload_size=len(fec_payload),
+                    crc_checksum=crc,  # CRC is set BEFORE signing
                     hmac_signature=b"\x00" * 32,
                 )
 
-                # 3. Sign (Header + Encrypted Payload)
+                # 5. Sign the Packet
+                # We sign: Header(includes CRC) + EncryptedPayload
+                # Note: We sign the EncryptedPayload (without FEC parity) to ensure
+                # we are verifying the data content, not the transmission wrapper.
                 header_bytes = header.pack_without_hmac()
                 header.hmac_signature = self.crypto.compute_hmac(
                     header_bytes + encrypted_payload
                 )
 
-                # 4. Send
-                self.network.send_packet(header.pack() + encrypted_payload)
+                # 6. Send
+                self.network.send_packet(header.pack() + fec_payload)
 
                 time.sleep(0.005)
-                if seq_num % 10 == 0:
-                    self.logger.info(f"Sent encrypted packet {seq_num + 1}/{total}")
 
         finally:
             self.network.close()

@@ -42,10 +42,19 @@ class FileChunker:
         """Generate a unique identifier for this file transfer"""
         return uuid.uuid4().bytes  # 16 bytes
 
-    def save_chunk(self, filepath: str, chunk: bytes, sequence: int, mode: str = "ab"):
+    def ensure_file_exists(self, filepath: str):
+        """Create an empty file if it doesn't exist."""
+        if not os.path.exists(filepath):
+            with open(filepath, "wb") as f:
+                pass
+
+    def save_chunk(self, filepath: str, chunk: bytes, offset: int):
         """
-        Save a chunk to file.
-        'ab' = append binary (for reassembly)
+        Save a chunk to a specific offset in the file.
+        Uses r+b to allow seeking without truncating.
         """
-        with open(filepath, mode) as file:
+        self.ensure_file_exists(filepath)
+
+        with open(filepath, "r+b") as file:
+            file.seek(offset)
             file.write(chunk)

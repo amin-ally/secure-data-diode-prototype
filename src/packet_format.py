@@ -17,13 +17,14 @@ class PacketHeader:
     total_packets: int  # (4 bytes) - helps receiver know when transfer is complete
     timestamp: int  # (8 bytes) - prevents replay attacks
     payload_size: int  # (4 bytes) - size of actual data in this packet
+    original_chunk_size: int  # Size of the plaintext chunk (e.g., 1024)
     crc_checksum: int  # (4 bytes) - error detection
     hmac_signature: bytes  # (32 bytes) - authentication and integrity
 
     # Format string for struct.pack/unpack
     # '>' means big-endian (network byte order)
     # B=unsigned char, 16s=16-char string, I=unsigned int, Q=unsigned long long
-    FORMAT = ">B16sIIQII32s"
+    FORMAT = ">B16sIIQIII32s"
     HEADER_SIZE = struct.calcsize(FORMAT)
 
     def pack(self) -> bytes:
@@ -36,6 +37,7 @@ class PacketHeader:
             self.total_packets,
             self.timestamp,
             self.payload_size,
+            self.original_chunk_size,
             self.crc_checksum,
             self.hmac_signature,
         )
@@ -43,13 +45,14 @@ class PacketHeader:
     def pack_without_hmac(self) -> bytes:
         """Pack header excluding HMAC (for computing HMAC over header + payload)."""
         return struct.pack(
-            ">B16sIIQII",  # Exclude 32s for hmac
+            ">B16sIIQIII",  # Exclude 32s for hmac
             self.version,
             self.file_id,
             self.sequence_num,
             self.total_packets,
             self.timestamp,
             self.payload_size,
+            self.original_chunk_size,
             self.crc_checksum,
         )
 

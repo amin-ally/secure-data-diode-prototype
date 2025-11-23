@@ -5,6 +5,9 @@ from cryptography.exceptions import InvalidTag
 from src.packet_format import PacketHeader
 from src.network_handler import NetworkHandler
 from src.crypto_utils import CryptoUtils
+from src.file_handler import FileChunker
+
+import os
 
 
 class Receiver:
@@ -12,10 +15,11 @@ class Receiver:
         self.network = NetworkHandler(host, port)
         self.crypto = CryptoUtils()
         self.rsc = RSCodec(10)
+        self.chunker = FileChunker()
         self.logger = logging.getLogger("Receiver")
-        self.received_packets = {}
+        self.active_transfers = {}
 
-    def receive_file(self, output_path: str):
+    def receive_file(self, output_dir: str = "."):
         self.network.setup_receiver()
         self.logger.info(f"Listening on {self.network.host}:{self.network.port}")
 
@@ -54,15 +58,37 @@ class Receiver:
                         encrypted_payload, associated_data=aad
                     )
 
-                    # 4. Store
+                    # 4. Store to Disk
                     fid = header.file_id.hex()
-                    if fid not in self.received_packets:
-                        self.received_packets[fid] = {}
-                    self.received_packets[fid][header.sequence_num] = decrypted_chunk
+                    temp_path = f"{output_dir}/{fid}.part"
 
-                    if len(self.received_packets[fid]) == header.total_packets:
-                        self.reassemble_file(fid, output_path)
-                        break
+                    # Calculate offset
+                    offset = header.sequence_num * header.original_chunk_size
+
+                    # Write immediately
+                    self.chunker.save_chunk(temp_path, decrypted_chunk, offset)
+
+                    # Update State
+                    if fid not in self.active_transfers:
+                        self.active_transfers[fid] = {
+                            "received_seqs": set(),
+                            "total": header.total_packets,
+                            "path": temp_path,
+                        }
+
+                    self.active_transfers[fid]["received_seqs"].add(header.sequence_num)
+
+                    # Check Completion
+                    if (
+                        len(self.active_transfers[fid]["received_seqs"])
+                        == header.total_packets
+                    ):
+                        self.logger.info(f"Transfer Complete: {fid}")
+                        # Rename .part to final (In real app, get filename from metadata packet)
+                        final_path = f"{output_dir}/received_{fid}.dat"
+                        os.rename(temp_path, final_path)
+                        del self.active_transfers[fid]
+                        # Removed the 'break' so it keeps listening
 
                 except InvalidTag:
                     self.logger.error("Decryption Failed")

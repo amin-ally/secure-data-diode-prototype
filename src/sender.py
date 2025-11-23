@@ -10,12 +10,13 @@ from src.crypto_utils import CryptoUtils
 
 
 class Sender:
-    def __init__(self, host="localhost", port=5000, chunk_size=1024):
+    def __init__(self, host="localhost", port=5000, chunk_size=1024, redundancy=2):
         self.network = NetworkHandler(host, port)
         self.chunker = FileChunker(chunk_size)
         self.crypto = CryptoUtils()
         self.rsc = RSCodec(10)
         self.logger = logging.getLogger("Sender")
+        self.redundancy = redundancy  # Send packets N times
 
     def send_file(self, filepath: str):
         file_id = self.chunker.generate_file_id()
@@ -43,6 +44,7 @@ class Sender:
                     total_packets=total,
                     timestamp=int(time.time() * 1000000),
                     payload_size=len(fec_payload),
+                    original_chunk_size=len(chunk),
                     crc_checksum=crc,  # CRC is set BEFORE signing
                     hmac_signature=b"\x00" * 32,
                 )
@@ -56,8 +58,11 @@ class Sender:
                     header_bytes + encrypted_payload
                 )
 
-                # 6. Send
-                self.network.send_packet(header.pack() + fec_payload)
+                # 6. Send (with Redundancy)
+                packet_data = header.pack() + fec_payload
+                for _ in range(self.redundancy):
+                    self.network.send_packet(packet_data)
+                    time.sleep(0.001)
 
                 time.sleep(0.005)
 

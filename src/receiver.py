@@ -8,6 +8,8 @@ from src.crypto_utils import CryptoUtils
 from src.file_handler import FileChunker
 
 import os
+import time
+import zlib
 
 
 class Receiver:
@@ -31,9 +33,19 @@ class Receiver:
 
                 try:
                     header = PacketHeader.unpack(data)
+                    # Check Replay / Stale Packets (e.g., 60 second window)
+                    current_time = int(time.time() * 1000000)
+                    if abs(current_time - header.timestamp) > 60 * 1000000:
+                        self.logger.warning(f"Dropped stale/replay packet from {addr}")
+                        continue
+
                     raw_fec_payload = data[PacketHeader.HEADER_SIZE :]
 
-                    # 1. FEC Decode (Fix Errors FIRST)
+                    # Verify CRC (Fast integrity check)
+                    if zlib.crc32(raw_fec_payload) != header.crc_checksum:
+                        self.logger.warning("CRC Mismatch - attempting FEC recovery...")
+
+                    # 1. FEC Decode
                     try:
                         # .decode returns [decoded_data, decoded_data_with_ecc, err_indices]
                         # We just want the first element (the original encrypted_payload)
